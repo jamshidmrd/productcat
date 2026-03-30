@@ -115,7 +115,7 @@ with tab1:
         with f1:
             search_query = st.text_input("🔍 Search by name or barcode", placeholder="Type here...")
         with f2:
-            all_cats = ["All"] + sorted(df['Category'].unique().tolist()) if not df.empty else ["All"]
+         all_cats = ["All"] + sorted([str(x) for x in df['Category'].unique() if pd.notna(x)]) if not df.empty else ["All"]
             selected_cat = st.selectbox("Filter Category", all_cats)
 
         # Filtering Logic
