@@ -10,16 +10,14 @@ import barcode
 from barcode.writer import ImageWriter
 
 # --- 1. SETUP & INITIALIZATION ---
-st.set_page_config(page_title="Product Showcase", layout="centered")
+st.set_page_config(page_title="Sales Pro Catalog", layout="wide")
 
-# Ensure an image directory exists to save uploads
 IMAGE_DIR = "product_images"
 if not os.path.exists(IMAGE_DIR):
     os.makedirs(IMAGE_DIR)
 
-# Initialize the SQLite Database
 def init_db():
-    conn = sqlite3.connect('products.db')
+    conn = sqlite3.connect('products.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS products (
@@ -38,145 +36,135 @@ def init_db():
 
 conn = init_db()
 
-# Helper function to generate barcode image in memory
 def generate_barcode_image(barcode_number):
     try:
-        # Code128 is flexible for different lengths and characters
         rv = io.BytesIO()
         barcode.get('code128', str(barcode_number), writer=ImageWriter()).write(rv)
         return rv
-    except Exception:
-        return None
+    except: return None
 
-# --- 2. APPLICATION LAYOUT ---
-# Use tabs to separate the showcase from the data entry
-tab1, tab2 = st.tabs(["📱 Product Showcase", "➕ Add New Product"])
+# --- 2. TABS ---
+tab1, tab2, tab3 = st.tabs(["📱 Showcase", "🖼️ Add/Update Photo", "📂 Excel Bulk Import"])
 
-# --- TAB 1: SHOWCASE TO SUPPLIERS ---
+# --- TAB 1: SHOWCASE ---
 with tab1:
-    st.title("Product Catalog")
-    
-    # Load data from database
+    st.title("Product Gallery")
     df = pd.read_sql_query("SELECT * FROM products", conn)
     
     if df.empty:
-        st.info("Your catalog is empty. Go to the 'Add New Product' tab to get started.")
+        st.info("Catalog is empty. Import an Excel file or add products manually.")
     else:
-        # Filter by category
-        categories = ["All"] + df['Category'].unique().tolist()
-        selected_category = st.selectbox("Filter by Category", categories)
-        
-        if selected_category != "All":
-            df = df[df['Category'] == selected_category]
-            
-        # Select a specific product to view
-        product_names = df['Product_Name'].tolist()
-        selected_product = st.selectbox("Select a Product to View Details", product_names)
-        
-        if selected_product:
-            # Get the specific row for the selected product
-            product_data = df[df['Product_Name'] == selected_product].iloc[0]
+        col_search, col_cat = st.columns(2)
+        with col_search:
+            search = st.text_input("Search Product Name or Barcode")
+        with col_cat:
+            categories = ["All"] + df['Category'].unique().tolist()
+            selected_cat = st.selectbox("Category Filter", categories)
+
+        # Filtering logic
+        filtered_df = df.copy()
+        if search:
+            filtered_df = filtered_df[filtered_df['Product_Name'].str.contains(search, case=False) | 
+                                     filtered_df['Barcode'].str.contains(search, case=False)]
+        if selected_cat != "All":
+            filtered_df = filtered_df[filtered_df['Category'] == selected_cat]
+
+        # Display Grid
+        if not filtered_df.empty:
+            selected_prod_name = st.selectbox("Click to view details:", filtered_df['Product_Name'].tolist())
+            prod = filtered_df[filtered_df['Product_Name'] == selected_prod_name].iloc[0]
             
             st.divider()
-            
-            # Layout: Image on the left, details on the right
-            col1, col2 = st.columns([1, 1.5])
-            
-            with col1:
-                # Display Product Image
-                image_path = product_data['Image_Path']
-                if os.path.exists(image_path):
-                    st.image(image_path, use_container_width=True)
+            c1, c2 = st.columns([1, 1.5])
+            with c1:
+                if prod['Image_Path'] and os.path.exists(prod['Image_Path']):
+                    st.image(prod['Image_Path'], use_container_width=True)
                 else:
-                    st.warning("Image file not found.")
-                    
-                # Display Generated Barcode
-                st.write("**Barcode:**")
-                barcode_img = generate_barcode_image(product_data['Barcode'])
-                if barcode_img:
-                    st.image(barcode_img, width=200)
-                else:
-                    st.write(product_data['Barcode'])
+                    st.warning("No photo uploaded yet.")
+                
+                b_img = generate_barcode_image(prod['Barcode'])
+                if b_img: st.image(b_img, caption=f"Barcode: {prod['Barcode']}", width=200)
+            
+            with c2:
+                st.header(prod['Product_Name'])
+                st.metric("Price", f"${prod['Price']:.2f}")
+                st.write(f"**Packing:** {prod['Packing']}")
+                st.write(f"**Description:** {prod['Description']}")
 
-            with col2:
-                # Display Text Details
-                st.header(product_data['Product_Name'])
-                st.subheader(f"Price: ${product_data['Price']:.2f}")
-                st.write(f"**Category:** {product_data['Category']}")
-                st.write(f"**Packing Details:** {product_data['Packing']}")
-                st.write("**Description:**")
-                st.write(product_data['Description'])
-
-# --- TAB 2: DATA ENTRY ---
+# --- TAB 2: ADD/UPDATE PHOTO ---
 with tab2:
-    st.title("Add a New Product")
+    st.title("Manage Product Photos")
+    df_manage = pd.read_sql_query("SELECT id, Product_Name, Barcode FROM products", conn)
     
-    # --- Image Upload Section ---
-    st.subheader("1. Product Image")
-    image_to_save = None
-    
-    # Option A: Drag and Drop
-    uploaded_file = st.file_uploader("Upload an image file (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
-    
-    st.write("--- OR ---")
-    
-    # Option B: Clipboard Paste
-    paste_result = paste_image_button(
-        label="📋 Paste Image from Clipboard",
-        background_color="#FF4B4B",
-        hover_background_color="#FF6B6B"
-    )
+    if df_manage.empty:
+        st.warning("No products found. Use 'Excel Bulk Import' first.")
+    else:
+        target_product = st.selectbox("Select Product to add/change photo:", 
+                                      df_manage['Product_Name'].tolist())
+        
+        st.subheader("Upload or Paste Image")
+        img_file = st.file_uploader("Drag & Drop Photo", type=['png', 'jpg', 'jpeg'], key="manual_up")
+        paste_res = paste_image_button("📋 Paste from Clipboard")
+        
+        final_img = None
+        if img_file: final_img = Image.open(img_file)
+        elif paste_res.image_data: final_img = paste_res.image_data
 
-    # Determine which image source is being used
-    if uploaded_file is not None:
-        image_to_save = Image.open(uploaded_file)
-        st.image(image_to_save, caption="Preview (From Upload)", width=250)
-    elif paste_result.image_data is not None:
-        image_to_save = paste_result.image_data
-        st.image(image_to_save, caption="Preview (From Clipboard)", width=250)
-
-    # --- Product Details Form ---
-    st.subheader("2. Product Details")
-    with st.form("new_product_form", clear_on_submit=True):
-        name = st.text_input("Product Name*")
-        
-        # Pre-set categories suitable for your catalog
-        category = st.selectbox("Category", ["Coffee Powder", "Coffee Vending Machine", "Accessories", "Other"])
-        
-        col_price, col_barcode = st.columns(2)
-        with col_price:
-            price = st.number_input("Price*", min_value=0.0, format="%.2f")
-        with col_barcode:
-            barcode_num = st.text_input("Barcode Number*")
-            
-        packing = st.text_input("Packing Details (e.g., 500g pouch, 1 unit/box)")
-        description = st.text_area("Product Description")
-        
-        submitted = st.form_submit_button("Save Product to Database")
-        
-        if submitted:
-            if not name or not barcode_num:
-                st.error("Product Name and Barcode are required fields.")
-            elif image_to_save is None:
-                st.error("Please upload or paste a product image.")
-            else:
-                # 1. Save the image to the local folder with a unique name
-                unique_filename = f"{uuid.uuid4().hex}.png"
-                filepath = os.path.join(IMAGE_DIR, unique_filename)
+        if final_img:
+            st.image(final_img, width=250, caption="Preview")
+            if st.button("Save Photo to Product"):
+                fname = f"{uuid.uuid4().hex}.png"
+                path = os.path.join(IMAGE_DIR, fname)
+                if final_img.mode in ("RGBA", "P"): final_img = final_img.convert("RGB")
+                final_img.save(path)
                 
-                # Convert image to RGB if it has an alpha channel (to save as standard format safely)
-                if image_to_save.mode in ("RGBA", "P"):
-                    image_to_save = image_to_save.convert("RGB")
-                    
-                image_to_save.save(filepath)
-                
-                # 2. Insert into database
                 c = conn.cursor()
-                c.execute('''
-                    INSERT INTO products 
-                    (Product_Name, Category, Price, Barcode, Packing, Image_Path, Description)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (name, category, price, barcode_num, packing, filepath, description))
+                c.execute("UPDATE products SET Image_Path = ? WHERE Product_Name = ?", (path, target_product))
                 conn.commit()
-                
-                st.success(f"✅ Successfully added '{name}' to the catalog!")
+                st.success(f"Photo updated for {target_product}!")
+
+# --- TAB 3: EXCEL BULK IMPORT ---
+with tab3:
+    st.title("Bulk Import Products")
+    st.write("Upload an Excel file with these columns: **Product_Name, Category, Price, Barcode, Packing, Description**")
+    
+    # Download template button
+    template_data = {
+        "Product_Name": ["Example Coffee"],
+        "Category": ["Coffee Powder"],
+        "Price": [15.50],
+        "Barcode": ["123456789"],
+        "Packing": ["500g Bag"],
+        "Description": ["High quality Arabica"]
+    }
+    st.download_button("Download Excel Template", 
+                       pd.DataFrame(template_data).to_csv(index=False), 
+                       "template.csv", "text/csv")
+
+    uploaded_excel = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'])
+    
+    if uploaded_excel:
+        if uploaded_excel.name.endswith('.csv'):
+            import_df = pd.read_csv(uploaded_excel)
+        else:
+            import_df = pd.read_excel(uploaded_excel)
+        
+        st.write("Preview of data to import:")
+        st.dataframe(import_df.head())
+        
+        if st.button("Confirm Bulk Import"):
+            try:
+                for _, row in import_df.iterrows():
+                    c = conn.cursor()
+                    # Check if barcode exists to avoid duplicates
+                    c.execute("SELECT id FROM products WHERE Barcode = ?", (str(row['Barcode']),))
+                    if not c.fetchone():
+                        c.execute('''
+                            INSERT INTO products (Product_Name, Category, Price, Barcode, Packing, Description)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (row['Product_Name'], row['Category'], row['Price'], 
+                              str(row['Barcode']), row['Packing'], row['Description']))
+                conn.commit()
+                st.success(f"Imported {len(import_df)} products successfully!")
+            except Exception as e:
+                st.error(f"Error: Make sure your column names match exactly. {e}")
